@@ -155,9 +155,9 @@ invalid_fat:
 	mov si, invalidfatmes
 	jmp owata
 
-	; put number of cluster to AX
-	; the number of next cluster in AX
-	; destroy si
+	; INPUT the number of cluster on AX
+	; OUTPUT the number of next cluster to AX
+	; destroy SI
 fetch_fat:
 	mov si, ax
 	and si, 0xff
@@ -178,8 +178,8 @@ fetch_fat_no_load:
 	mov ax, [diskbuffer + si] ; read the FAT entry
 	ret
 
-	; put cluster number to AX
-	; sector number in DX:AX
+	; INPUT cluster number on AX
+	; OUTPUT sector number to DX:AX
 cluster_to_sector:
 	push cx
 	push si
@@ -207,8 +207,8 @@ cluster_to_sector:
 	pop cx
 	ret
 
-	; put sector number to DX:AX
-	; put address to ES:BX
+	; INPUT sector number on DX:AX
+	; INPUT address on ES:BX
 read_disk:
 	push ax
 	push cx
@@ -245,19 +245,20 @@ read_disk_error:
 	mov si, diskerrormes
 	jmp owata
 
-	; put the address of null-terminated string to si
+	; INPUT the address of null-terminated string on SI
 owata:
 	mov ah, 0x0e
 	xor bx, bx
-owata_loop:
+owata_puts_loop:
 	mov al, [si]
 	test al, al
-	jz owata_end
+	jz owata_puts_end
 	int 0x10
 	inc si
-	jmp owata_loop
-owata_end:
+	jmp owata_puts_loop
+owata_puts_end:
 	cli
+owata_end:
 	hlt
 	jmp owata_end
 
