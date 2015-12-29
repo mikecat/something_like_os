@@ -64,10 +64,8 @@ searchfile_loop:
 	test di, di
 	jnz searchfile_no_read
 	; read next sector
-	push ax
 	call read_disk
 	; increment sector number
-	pop ax
 	add ax, 1
 	adc dx, 0
 	mov di, 16 ; set number of entries in a sector
