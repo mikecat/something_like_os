@@ -1,0 +1,4 @@
+*.img
+*.bin
+*.bxrc
+*-disasm.txt
