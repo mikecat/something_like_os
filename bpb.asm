@@ -90,7 +90,6 @@ searchfile_no_read:
 	loop searchfile_loop
 	; target not found
 	mov si, notfoundmes
-	call puts
 	jmp owata
 
 file_found:
@@ -101,7 +100,6 @@ file_found:
 	jbe file_size_ok
 file_too_large:
 	mov si, toolargemes
-	call puts
 	jmp owata
 
 file_size_ok:
@@ -155,17 +153,10 @@ file_read_end:
 
 no_data:
 	mov si, nodatames
-	call puts
 	jmp owata
 
 invalid_fat:
 	mov si, invalidfatmes
-	call puts
-	; jmp owata
-
-owata:
-	cli
-	hlt
 	jmp owata
 
 	; put number of cluster to AX
@@ -257,50 +248,46 @@ read_disk:
 	ret
 read_disk_error:
 	mov si, diskerrormes
-	call puts
 	jmp owata
 
 	; put the address of null-terminated string to si
-	; si will be destroyed
-puts:
-	push ax
-	push bx
+owata:
 	mov ah, 0x0e
 	xor bx, bx
-;puts_loop:
+puts_loop:
 	mov al, [si]
-;	test al, al
-;	jz puts_end
-;	int 0x10
-;	inc si
-;	jmp puts_loop
-;puts_end:
-	pop bx
-	pop ax
-	ret
+	test al, al
+	jz puts_end
+	int 0x10
+	inc si
+	jmp puts_loop
+puts_end:
+	cli
+	hlt
+	jmp puts_end
 
 cached_fat_sector: ; variable: which sector of FAT is cached?
 	dw 0xffff
 
 diskerrormes:
 	;db 'Disk error', 0
-	db 'D'
+	db 'DE', 0
 
 notfoundmes:
 	;db 'Not found', 0
-	db 'N'
+	db 'NF', 0
 
 toolargemes:
 	;db 'Too large', 0
-	db 'L'
+	db 'TL', 0
 
 nodatames:
 	;db 'No data', 0
-	db 'Z' ; zero
+	db 'ND', 0
 
 invalidfatmes:
 	;db 'Invalid FAT', 0
-	db 'F' ; FAT
+	db 'IF', 0
 
 target_name:
 	db 'ENTRY   BIN'
