@@ -48,7 +48,7 @@ start2:
 	xor dh, dh
 	inc dx
 	mov [heads], dx
-	and cx, 0x003F
+	and cx, strict word 0x003F
 	mov [sectors_per_track], cx
 
 	; read RDE and search the file
@@ -160,7 +160,7 @@ invalid_fat:
 	; destroy SI
 fetch_fat:
 	mov si, ax
-	and si, 0xff
+	and si, strict word 0xff
 	shl si, 1 ; index within the FAT sector
 	mov al, ah
 	xor ah, ah ; AX = number of FAT sector to read
