@@ -201,9 +201,9 @@ cluster_to_sector:
 	mov cl, 4
 	shr ax, cl
 	add [si], ax
-	adc word [si + 2], 0 ; add number of sectors for RDE
 	pop ax
 	pop dx
+	adc dx, 0 ; add number of sectors for RDE
 	pop si
 	pop cx
 	ret
