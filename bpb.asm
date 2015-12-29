@@ -243,7 +243,7 @@ read_disk:
 	ret
 read_disk_error:
 	mov si, diskerrormes
-	jmp owata
+	; jmp owata
 
 	; INPUT the address of null-terminated string on SI
 owata:
