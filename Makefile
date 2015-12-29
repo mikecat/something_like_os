@@ -1,32 +1,36 @@
-.PHONY: all
-all: mbr bpb
+IMG=hdd.img
+IMGDIR=imagegen
+LOADERDIR=loader
+
+.PHONY: dummy
+dummy:
 
 .PHONY: mbr
-mbr: mbr.bin mbr-disasm.txt
+mbr: $(LOADERDIR)/mbr.bin $(LOADERDIR)/mbr-disasm.txt
 
-mbr.bin: mbr.asm
-	nasm -w+all -o mbr.bin mbr.asm
+$(LOADERDIR)/mbr.bin: $(LOADERDIR)/mbr.asm
+	nasm -w+all -o $(LOADERDIR)/mbr.bin $(LOADERDIR)/mbr.asm
 
-mbr-disasm.txt: mbr.bin
-	objdump -D -b binary -m i8086 mbr.bin > mbr-disasm.txt
+$(LOADERDIR)/mbr-disasm.txt: $(LOADERDIR)/mbr.bin
+	objdump -D -b binary -m i8086 $(LOADERDIR)/mbr.bin > $(LOADERDIR)/mbr-disasm.txt
 
 .PHONY: bpb
-bpb: bpb.bin bpb-disasm.txt
+bpb: $(LOADERDIR)/bpb.bin $(LOADERDIR)/bpb-disasm.txt
 
-bpb.bin: bpb.asm
-	nasm -w+all -o bpb.bin bpb.asm
+$(LOADERDIR)/bpb.bin: $(LOADERDIR)/bpb.asm
+	nasm -w+all -o $(LOADERDIR)/bpb.bin $(LOADERDIR)/bpb.asm
 
-bpb-disasm.txt: bpb.bin
-	objdump -D -b binary -m i8086 bpb.bin > bpb-disasm.txt
+$(LOADERDIR)/bpb-disasm.txt: $(LOADERDIR)/bpb.bin
+	objdump -D -b binary -m i8086 $(LOADERDIR)/bpb.bin > $(LOADERDIR)/bpb-disasm.txt
 
-plainhdd.img: plainhdd.asm
-	nasm -o plainhdd.img plainhdd.asm
+$(IMGDIR)/plainhdd.img: $(IMGDIR)/plainhdd.asm
+	nasm -o $(IMGDIR)/plainhdd.img $(IMGDIR)/plainhdd.asm
 
 .PHONY: writembr
 writembr: mbr
-	dd bs=1 conv=notrunc count=446 if=mbr.bin of=hdd.img
-	dd bs=1 conv=notrunc count=2 skip=510 seek=510 if=mbr.bin of=hdd.img
+	dd bs=1 conv=notrunc count=446 if=$(LOADERDIR)/mbr.bin of=hdd.img
+	dd bs=1 conv=notrunc count=2 skip=510 seek=510 if=$(LOADERDIR)/mbr.bin of=$(IMG)
 
 .PHONY: writebpb
 writebpb: bpb
-	dd bs=1 conv=notrunc count=450 skip=62 seek=8773694 if=bpb.bin of=hdd.img
+	dd bs=1 conv=notrunc count=450 skip=62 seek=8773694 if=$(LOADERDIR)/bpb.bin of=$(IMG)
