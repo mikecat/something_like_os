@@ -57,33 +57,31 @@ start2:
 	xor bh, bh
 	mul bx ; DX:AX = number of sector of RDE
 	mov cx, [root_entries] ; number of RDE sector
-	xor di, di ; number of entry in current sector
+	xor bp, bp ; number of entry in current sector
 	mov si, bx
 	mov bx, diskbuffer ; address to read RDE data
 searchfile_loop:
-	test di, di
+	test bp, bp
 	jnz searchfile_no_read
 	; read next sector
 	call read_disk
 	; increment sector number
 	add ax, 1
 	adc dx, 0
-	mov di, 16 ; set number of entries in a sector
+	mov bp, 16 ; set number of entries in a sector
 	mov si, bx ; set address of the next entry
 searchfile_no_read:
 	push cx
 	push si
-	push di
 	; compare file name
 	mov cx, 11
 	mov di, target_name
 	cld
 	repe cmpsb
-	pop di
 	pop si
 	pop cx
 	je file_found
-	dec di ; decrement number of entries in a sector
+	dec bp ; decrement number of entries in a sector
 	add si, 0x20 ; look at the next entry
 	loop searchfile_loop
 	; target not found
