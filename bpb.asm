@@ -254,17 +254,17 @@ read_disk_error:
 owata:
 	mov ah, 0x0e
 	xor bx, bx
-puts_loop:
+owata_loop:
 	mov al, [si]
 	test al, al
-	jz puts_end
+	jz owata_end
 	int 0x10
 	inc si
-	jmp puts_loop
-puts_end:
+	jmp owata_loop
+owata_end:
 	cli
 	hlt
-	jmp puts_end
+	jmp owata_end
 
 cached_fat_sector: ; variable: which sector of FAT is cached?
 	dw 0xffff
