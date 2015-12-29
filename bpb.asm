@@ -109,8 +109,8 @@ file_size_ok:
 	mov bx, loadaddr ; BX = where to load
 	xor dh, dh
 	mov dl, [sectors_per_cluster]
-	mov si, dx ; sectors left in current cluster
-	mov di, si ; setors per cluster
+	mov di, dx ; sectors left in current cluster
+	mov bp, di ; setors per cluster
 	push ax
 	call fetch_fat
 	cmp ax, 0x0001
@@ -128,7 +128,7 @@ file_read_loop:
 	adc dx, 0
 	dec cx
 	jz file_read_end ; no sector left to read
-	dec si
+	dec di
 	jnz file_read_loop
 	; proceed to the next cluster
 	pop ax
@@ -139,7 +139,7 @@ file_read_loop:
 	jae invalid_fat
 	push ax
 	call cluster_to_sector
-	mov si, di
+	mov di, bp
 	jmp file_read_loop
 
 file_read_end:
@@ -157,8 +157,8 @@ invalid_fat:
 
 	; put number of cluster to AX
 	; the number of next cluster in AX
+	; destroy si
 fetch_fat:
-	push si
 	mov si, ax
 	and si, 0xff
 	shl si, 1 ; index within the FAT sector
@@ -176,7 +176,6 @@ fetch_fat:
 	pop dx
 fetch_fat_no_load:
 	mov ax, [diskbuffer + si] ; read the FAT entry
-	pop si
 	ret
 
 	; put cluster number to AX
