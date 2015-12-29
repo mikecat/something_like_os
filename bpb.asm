@@ -270,8 +270,7 @@ diskerrormes:
 	db 'DE', 0
 
 notfoundmes:
-	;db 'Not found', 0
-	db 'NF', 0
+	db 'Not found', 0
 
 toolargemes:
 	;db 'Too large', 0
