@@ -577,7 +577,35 @@ printhex_noalpha:
 	leave
 	ret
 
+interrupt_handler:
+	push ebp
+	mov ebp, esp
+	push ebx
+	mov eax, [ebp + 8]
+	cmp eax, 0x20
+	jae interrupt_handler_ret
+	push interrupt_message
+	call putstr
+	mov eax, [ebp + 8]
+	mov [esp], eax
+	call printhex
+	mov dword [esp], 0x0D
+	call putchar
+	mov dword [esp], 0x0A
+	call putchar
+	add esp, 4
+	jmp exit
+interrupt_handler_ret:
+	pop ebx
+	leave
+	ret
+
+interrupt_message:
+	db 13, 10, 'Trap : ', 0
+
 app_start:
+	mov dword [int_handler_addr], interrupt_handler
+
 	push 0
 	push 0x30000
 	call read_sector
@@ -612,6 +640,8 @@ no_print_lf:
 	add esp, 4
 	pop ecx
 	loop dump_loop
+
+	mov byte [disk_no], 0xAA ; will be rejected by CPU
 
 exit:
 	cli
