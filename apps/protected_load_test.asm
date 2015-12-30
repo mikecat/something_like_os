@@ -2,9 +2,11 @@ bits 16
 org 0x0500
 
 initial_stack equ 0x1FFF0
+stack_end equ 0x10000
 
 pde_addr equ 0x20000
 pte_addr equ 0x21000
+idt_addr equ 0x22000
 
 start:
 	cli
@@ -18,6 +20,9 @@ disk_no:
 gdt_ptr:
 	dw 8 * 5
 	dd gdt
+idt_ptr:
+	dw 8 * 256
+	dd idt_addr
 
 	align 8
 gdt:
@@ -167,12 +172,12 @@ si_calc_end:
 	jmp [si_int_addr]
 si_int_10:
 	int 0x10
-	jmp si_int_end
+	jmp strict short si_int_end
 si_int_11:
 %assign i 0x11
 %rep 0x1A - 0x11 + 1
 	int i
-	jmp si_int_end
+	jmp strict short si_int_end
 %assign i i+1
 %endrep
 si_int_end:
@@ -234,7 +239,44 @@ soft_int_ret:
 	popfd
 	ret 4
 
-bits 32
+int_hardware:
+	push strict dword 0
+	jmp strict long int_hardware_start
+int_hardware_delta:
+%assign i 1
+%rep 255 - 1 + 1
+	push strict dword i
+	jmp strict long int_hardware_start
+%assign i i+1
+%endrep
+int_hardware_start:
+	cli
+	pusha
+	mov eax, [esp + 32]
+	push eax
+	mov eax, [int_handler_addr]
+	test eax, eax
+	jz int_hardware_none
+	call eax
+int_hardware_none:
+	add esp, 4 ; remove interrupt number as argument
+	popa
+	; remove interrupt number if error code is likely to exist
+	cmp dword [esp], 8
+	je int_hardware_remove_error_code
+	cmp dword [esp], 17
+	je int_hardware_remove_error_code
+	cmp dword [esp], 10
+	jb int_hardware_no_error_code
+	cmp dword [esp], 14
+	ja int_hardware_no_error_code
+int_hardware_remove_error_code:
+	add esp, 4
+int_hardware_no_error_code:
+	add esp, 4 ; remove interrupt number or error code
+	sti
+	iret
+
 align 4
 sector_num:   dd 0
 head_num:     dd 0
@@ -278,6 +320,120 @@ disk_init_end:
 	pop esi
 	pop ebx
 	ret
+
+pstart:
+	mov ax, 16
+	mov ss, ax
+	mov ds, ax
+	mov es, ax
+	mov ss, ax
+	mov fs, ax
+	mov gs, ax
+	mov esp, initial_stack
+
+	; initialize master PIC
+	mov al, 0b00010001 ; ICW1
+	out 0x20, al
+	mov al, 0x20 ; ICW2
+	out 0x21, al
+	mov al, 0b00000100 ; ICW3
+	out 0x21, al
+	mov al, 0b00000001 ; ICW4
+	out 0x21, al
+	mov al, 0b11111111 ; OCW1
+	out 0x21, al
+	; initialize slave PIC
+	mov al, 0b00010001 ; ICW1
+	out 0xA0, al
+	mov al, 0x28 ; ICW2
+	out 0xA1, al
+	mov al, 0x02 ; ICW3
+	out 0xA1, al
+	mov al, 0b00000001 ; ICW4
+	out 0xA1, al
+	mov al, 0b11111111 ; OCW1
+	out 0xA1, al
+
+	; initialize IDT
+	mov dword [int_handler_addr], 0
+	mov ax, 0b10001_110_000_00000
+	mov ebx, idt_addr ; the address of entry in table
+	mov edx, int_hardware ; where to jump on interrupt
+	mov ecx, 256
+init_idt_loop:
+	mov [ebx], dx
+	mov word [ebx + 2], 8
+	mov [ebx + 4], ax
+	ror edx, 16
+	mov [ebx + 6], dx
+	ror edx, 16
+	add ebx, 8
+	add edx, (int_hardware_delta - int_hardware)
+	loop init_idt_loop
+	lidt [idt_ptr]
+	sti
+
+	; initialize PDE
+	xor eax, eax
+	mov edi, pde_addr
+	mov ecx, 0x400
+	rep stosd
+	mov dword [pde_addr], (pte_addr & 0xFFFFF000) | 0b000000_000011
+	; initialize PTE
+	; identity map for first 1MB
+	mov eax, 0x00000003
+	mov edi, pte_addr
+	mov ecx, 0x100
+init_pte_loop:
+	stosd
+	add eax, 0x1000
+	loop init_pte_loop
+	; disable left
+	xor eax, eax
+	mov ecx, 0x300
+	rep stosd
+	; disable caching for VRAM
+	mov esi, pte_addr + ((0xA0000 >> 12) << 2)
+	mov edi, esi
+	mov ecx, 20
+init_pte_loop2:
+	lodsd
+	or eax, 0x18
+	stosd
+	loop init_pte_loop2
+	; protect data from stack becoming too big by removing a page
+	and dword [pte_addr + ((stack_end >> 12) << 2)], 0xFFFFFFFC
+	; enable paging
+	mov eax, pde_addr
+	mov cr3, eax
+
+	; initialize screen
+	mov ax, 0x0003
+	push 0x10
+	call soft_int
+
+	; initialize disk
+	call disk_init
+	test eax, eax
+	jz init_disk_ok
+	push eax
+	push disk_init_ng_mes
+	call putstr
+	pop eax
+	call printhex
+	pop eax
+	jmp exit
+init_disk_ok:
+	; protect disk information by making first 0x8000 bytes read-only
+	mov esi, pte_addr
+	mov edi, esi
+	mov ecx, 8
+disk_readonly_loop:
+	lodsd
+	and eax, 0xFFFFFFFD
+	stosd
+	loop disk_readonly_loop
+	jmp app_start
 
 	; int read_sector(void* addr, unsigned int lba)
 	; return 0 if no error, error code if error
@@ -421,80 +577,41 @@ printhex_noalpha:
 	leave
 	ret
 
-pstart:
-	mov ax, 16
-	mov ss, ax
-	mov ds, ax
-	mov es, ax
-	mov ss, ax
-	mov fs, ax
-	mov gs, ax
-	mov esp, initial_stack
-
-	; initialize PDE
-	xor eax, eax
-	mov edi, pde_addr
-	mov ecx, 0x400
-	rep stosd
-	mov dword [pde_addr], (pte_addr & 0xFFFFF000) | 0b000000_000011
-	; initialize PTE
-	; identity map for first 1MB
-	mov eax, 0x00000003
-	mov edi, pte_addr
-	mov ecx, 0x100
-init_pte_loop:
-	stosd
-	add eax, 0x1000
-	loop init_pte_loop
-	; disable left
-	xor eax, eax
-	mov ecx, 0x300
-	rep stosd
-	; disable caching for VRAM
-	mov esi, pte_addr + ((0xA0000 >> 12) << 2)
-	mov edi, esi
-	mov ecx, 20
-init_pte_loop2:
-	lodsd
-	or eax, 0x18
-	stosd
-	loop init_pte_loop2
-	; enable paging
-	mov eax, pde_addr
-	mov cr3, eax
-
-	; initialize screen
-	mov ax, 0x0003
-	push 0x10
-	call soft_int
-
-	; initialize disk
-	call disk_init
+app_start:
+	push 0
+	push 0x30000
+	call read_sector
+	add esp, 8
 	test eax, eax
-	jz init_disk_ok
+	jz read_ok
 	push eax
 	push disk_init_ng_mes
 	call putstr
-	pop eax
-	call printhex
-	pop eax
-	jmp exit
-init_disk_ok:
-	; protect disk information by making first 0x8000 bytes read-only
-	mov esi, pte_addr
-	mov edi, esi
-	mov ecx, 8
-disk_readonly_loop:
-	lodsd
-	and eax, 0xFFFFFFFD
-	stosd
-	loop disk_readonly_loop
-
-	push hello_mes
-	call putstr
-	mov dword [esp], 0xDEADBEEF
-	call printhex
 	add esp, 4
+	call printhex
+	jmp exit
+read_ok:
+	mov ecx, 0x80
+	mov ebx, 0x30000
+dump_loop:
+	push ecx
+	test ecx,7
+	jnz no_print_lf
+	push 0x0D
+	call putchar
+	mov dword [esp], 0x0A
+	call putchar
+	add esp, 4
+no_print_lf:
+	mov eax, [ebx]
+	push eax
+	call printhex
+	add ebx, 4
+	mov dword [esp], ' '
+	call putchar
+	add esp, 4
+	pop ecx
+	loop dump_loop
 
 exit:
 	cli
@@ -505,8 +622,8 @@ stop_loop:
 disk_init_ng_mes:
 	db 'disk_init failed : ', 0
 
-hello_mes:
-	db 'hello, world!', 13, 10, 0
+disk_read_ng_mes:
+	db 'disk_read failed : ', 0
 
 absolute 0x8000
 
@@ -532,3 +649,5 @@ si_gs:  resw 1
 si_int_addr: resw 1
 si_idt: resb 6
 si_idt_zero: resb 6
+
+int_handler_addr: resd 1
