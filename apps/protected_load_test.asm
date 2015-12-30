@@ -282,12 +282,66 @@ sector_num:   dd 0
 head_num:     dd 0
 cylinder_num: dd 0
 
+fat_begin_sector: dd 0 ; where the first FAT begins?
+fat_number:       dd 0 ; how many FATs are there in this partition?
+fat_size:         dd 0 ; number of sectors in one FAT
+cluster_size:     dd 0 ; number of sectors in one cluster
+root_entry_size:  dd 0 ; number of entries in root entry
+disk_size:        dd 0 ; number of sectors in this partition
+
 	; int disk_init(void)
 	; return 0 if no error, error code on error
+	; error code 0x100 = unsupported sector size
+	; error code 0x101 = unsupported FAT type
 disk_init:
 	push ebx
 	push esi
 	push edi
+	; read file system parameters from BPB
+	; check sector size
+	mov ax, [bpb_bytes_per_sector]
+	cmp ax, 0x200
+	je disk_init_sector_size_ok
+	mov ax, 0x100
+	jmp disk_init_end
+disk_init_sector_size_ok:
+	; calculate the first sector of FAT
+	mov ax, [bpb_reserved_sectors]
+	movzx eax, ax
+	add eax, [bpb_hidden_sectors]
+	mov [fat_begin_sector], eax
+	; read parameters
+	mov al, [bpb_number_of_fats]
+	movzx eax, al
+	mov [fat_number], eax
+	mov ax, [bpb_sectors_per_fat]
+	movzx eax, ax
+	mov [fat_size], eax
+	mov al, [bpb_sectors_per_cluster]
+	movzx eax, al
+	mov [cluster_size], eax
+	mov ax, [bpb_root_entries]
+	movzx eax, ax
+	mov [root_entry_size], eax
+	mov ax, [bpb_total_sectors]
+	movzx eax, ax
+	test eax, eax
+	jnz disk_init_sector_not_big
+	mov eax, [bpb_big_total_sectors]
+disk_init_sector_not_big:
+	mov [disk_size], eax
+	; check FAT type
+	xor edx, edx
+	div dword [cluster_size]
+	cmp eax, 4085
+	jbe disk_init_fat_type_ng
+	cmp eax, 65525
+	jbe disk_init_fat_type_ok
+disk_init_fat_type_ng:
+	mov eax, 0x101
+	jmp disk_init_end
+disk_init_fat_type_ok:
+	; get disk parameters from BIOS
 	mov ah, 0x08
 	mov dl, [disk_no]
 	push 0x13
@@ -577,6 +631,157 @@ printhex_noalpha:
 	leave
 	ret
 
+	; int read_fat(int cluster_no)
+	; return the FAT entry
+	; index error -> return -0x10000
+	; disk read error -> return -(error code)
+read_fat:
+	push ebp
+	mov ebp, esp
+	mov eax, [ebp + 8]
+	cmp eax, 0
+	jl read_fat_index_error ; negative index -> error
+	movzx ecx, al ; index within the sector
+	shr eax, 8 ; the index of sector
+	cmp eax, [fat_size]
+	jae read_fat_index_error ; index too large
+	cmp eax, [fat_cache_sector]
+	je read_fat_cache_hit
+	; cache miss, read the disk
+	push eax
+	push ecx
+	add eax, [fat_begin_sector]
+	push eax ; sector number
+	push fat_cache ; address
+	call read_sector
+	add esp, 8
+	test eax, eax
+	jz read_fat_read_ok
+	; read error
+	add esp, 8
+	neg eax
+	jmp read_fat_end
+read_fat_read_ok:
+	pop ecx
+	pop eax
+	mov [fat_cache_sector], eax
+read_fat_cache_hit:
+	; get the data in the sector
+	shl ecx, 1
+	mov ax, [fat_cache + ecx]
+	movzx eax, ax
+	jmp read_fat_end
+read_fat_index_error:
+	mov eax, -0x10000
+read_fat_end:
+	leave
+	ret
+
+	; int search_file(int *cluster, unsigned int *size, const char *name)
+	; successfully found -> return 0
+	; not found -> return -1
+	; disk read error -> return (error code)
+search_file:
+	push ebp
+	mov ebp, esp
+	; int [ebp - 4] : save ESI
+	; int [ebp - 8] : save EDI
+	mov [ebp - 4], esi
+	mov [ebp - 8], edi
+	; char [ebp - 20][12] : file name on RDE to search
+	; int [ebp - 24] : entries left in this secctor
+	; int [ebp - 28] : entries left
+	; int [ebp - 32] : current sector number
+	sub esp, 32
+	; check if name is NULL
+	mov esi, [ebp + 16]
+	test esi, esi
+	jz search_file_not_found
+	; convert name to format for RDE
+	mov al, ' '
+	mov ecx, 11
+	lea edi, [ebp - 20]
+	rep stosb
+	; save filename
+	mov ecx, 8
+	mov esi, [ebp + 16]
+	lea edi, [ebp - 20]
+search_file_convert_filename:
+	lodsb
+	; delimiter of filename and extension
+	cmp al, '.'
+	je search_file_convert_filename_end
+	; end of string
+	cmp al, 0
+	je search_file_convert_extension_end
+	; make letters upper case
+	cmp al, 'a'
+	jb search_file_filename_no_toupper
+	cmp al, 'z'
+	ja search_file_filename_no_toupper
+	add al, ('A' - 'a')
+search_file_filename_no_toupper:
+	stosb
+	loop search_file_convert_filename
+	; skip until '.' or '\0'
+search_file_skip_until_extension:
+	mov al, [esi]
+	inc esi
+	cmp al, '.'
+	je search_file_convert_filename_end
+	cmp al, 0
+	je search_file_convert_extension_end
+	jmp search_file_skip_until_extension
+search_file_convert_filename_end:
+	; save extension
+	mov ecx, 3
+	; no need to change ESI
+	lea edi, [ebp - 12] ; [ebp - 20 + 8]
+search_file_convert_extension:
+	lodsb
+	; end of string
+	cmp al, 0
+	je search_file_convert_extension_end
+	; make letters upper case
+	cmp al, 'a'
+	jb search_file_extension_no_toupper
+	cmp al, 'z'
+	ja search_file_extension_no_toupper
+	add al, ('A' - 'a')
+search_file_extension_no_toupper:
+	stosb
+	loop search_file_convert_extension
+search_file_convert_extension_end:
+	; test
+	mov byte [ebp - 9], 0
+	push '"'
+	call putchar
+	lea eax, [ebp - 20]
+	mov [esp], eax
+	call putstr
+	mov dword [esp], '"'
+	call putchar
+	mov dword [esp], 0x0D
+	call putchar
+	mov dword [esp], 0x0A
+	call putchar
+	add esp, 4
+	jmp search_file_end
+	; calculate first sector number of RDE
+	mov eax, [fat_size]
+	mul dword [fat_number]
+	add eax, [fat_begin_sector]
+	mov [ebp - 32], eax
+	jmp search_file_end
+search_file_not_found:
+	mov eax, -1
+search_file_end:
+	; restore saved registers
+	mov esi, [ebp - 4]
+	mov edi, [ebp - 8]
+	leave
+	ret
+
 interrupt_handler:
 	push ebp
 	mov ebp, esp
@@ -605,43 +810,25 @@ interrupt_message:
 
 app_start:
 	mov dword [int_handler_addr], interrupt_handler
+	mov dword [fat_cache_sector], 0xFFFFFFFF
 
-	push 0
-	push 0x30000
-	call read_sector
-	add esp, 8
-	test eax, eax
-	jz read_ok
-	push eax
-	push disk_init_ng_mes
+	push ruler
 	call putstr
 	add esp, 4
-	call printhex
-	jmp exit
-read_ok:
-	mov ecx, 0x80
-	mov ebx, 0x30000
-dump_loop:
-	push ecx
-	test ecx,7
-	jnz no_print_lf
-	push 0x0D
-	call putchar
-	mov dword [esp], 0x0A
-	call putchar
-	add esp, 4
-no_print_lf:
-	mov eax, [ebx]
-	push eax
-	call printhex
-	add ebx, 4
-	mov dword [esp], ' '
-	call putchar
-	add esp, 4
-	pop ecx
-	loop dump_loop
-
-	mov byte [disk_no], 0xAA ; will be rejected by CPU
+	push test1
+	push 0
+	push 0
+	call search_file
+	mov dword [esp + 8], test2
+	call search_file
+	mov dword [esp + 8], test3
+	call search_file
+	mov dword [esp + 8], test4
+	call search_file
+	mov dword [esp + 8], test5
+	call search_file
+	mov dword [esp + 8], test6
+	call search_file
 
 exit:
 	cli
@@ -649,11 +836,35 @@ stop_loop:
 	hlt
 	jmp stop_loop
 
+ruler: db '"0123456789A"', 13, 10, 0
+test1: db 'test.txt', 0
+test2: db 'tesuto', 0
+test3: db 'hogehogehoge.txt', 0
+test4: db 'hoge.text', 0
+test5: db '.abc', 0
+test6: db 'ABC$!.tXt', 0
+
 disk_init_ng_mes:
 	db 'disk_init failed : ', 0
 
 disk_read_ng_mes:
 	db 'disk_read failed : ', 0
+
+absolute 0x7C00
+bpb_jmp_ope_code:        resb 3
+bpb_oem_name:            resb 8
+bpb_bytes_per_sector:    resw 1
+bpb_sectors_per_cluster: resb 1
+bpb_reserved_sectors:    resw 1
+bpb_number_of_fats:      resb 1
+bpb_root_entries:        resw 1
+bpb_total_sectors:       resw 1
+bpb_media_descriptor:    resb 1
+bpb_sectors_per_fat:     resw 1
+bpb_sectors_per_track:   resw 1
+bpb_heads:               resw 1
+bpb_hidden_sectors:      resd 1
+bpb_big_total_sectors:   resd 1
 
 absolute 0x8000
 
@@ -681,3 +892,8 @@ si_idt: resb 6
 si_idt_zero: resb 6
 
 int_handler_addr: resd 1
+
+fat_cache_sector: resd 1
+fat_cache: resb 0x200
+
+search_file_buffer: resb 0x200
