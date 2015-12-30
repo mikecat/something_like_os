@@ -6,7 +6,8 @@ stack_end equ 0x10000
 
 pde_addr equ 0x20000
 pte_addr equ 0x21000
-idt_addr equ 0x22000
+pte_window_addr equ 0x22000
+idt_addr equ 0x23000
 
 start:
 	cli
@@ -677,6 +678,31 @@ read_fat_end:
 	leave
 	ret
 
+	; unsigned int cluster_to_first_sector(int cluster)
+	; return 0xFFFFFFFF if error
+cluster_to_first_sector:
+	push ebp
+	mov ebp, esp
+	mov eax, [ebp + 8]
+	sub eax, 2
+	jl cluster_to_first_sector_error
+	mul dword [cluster_size] ; offset from first data sector
+	mov ecx, eax
+	mov eax, [fat_size]
+	mul dword [fat_number] ; beginning of RDE
+	add ecx, eax
+	mov eax, [root_entry_size]
+	add eax, 0xF
+	shr eax, 4 ; number of sectors for RDE
+	add eax, ecx
+	add eax, [fat_begin_sector] ; beginning of FAT
+	jmp cluster_to_first_sector_end
+cluster_to_first_sector_error:
+	mov eax, 0xFFFFFFFF
+cluster_to_first_sector_end:
+	leave
+	ret
+
 	; int search_file(int *cluster, unsigned int *size, const char *name)
 	; successfully found -> return 0
 	; not found -> return -1
@@ -853,37 +879,153 @@ interrupt_handler_ret:
 interrupt_message:
 	db 13, 10, 'Trap : ', 0
 
+	; void make_sure_page(void* address)
+make_sure_page:
+	push ebp
+	mov ebp, esp
+	mov ecx, [ebp + 8]
+	mov eax, ecx
+	shr eax, 22
+	shl eax, 2
+	mov edx, [pde_addr + eax] ; load PDE to EDX
+	test edx, 1
+	jnz make_sure_page_pde_exist
+	; the page directly doesn't exit
+	mov edx, [next_physical_addr] ; get next address of memory
+	add dword [next_physical_addr], 0x1000
+	or edx, 3
+	mov [pde_addr + eax], edx ; create page directly
+make_sure_page_pde_exist:
+	; make the page table accessable
+	or edx, 3
+	mov [pte_addr + ((pte_window_addr >> 12) << 2)], edx
+	; check the page
+	mov eax, ecx
+	shr eax, 12
+	and eax, 0x3FF
+	shl eax, 2
+	mov edx, [pte_window_addr + eax]
+	test edx, 1
+	jnz make_sure_page_pte_exist
+	mov edx, [next_physical_addr]
+	add dword [next_physical_addr], 0x1000
+	or edx, 3
+	mov [pte_window_addr + eax], edx
+make_sure_page_pte_exist:
+	leave
+	ret
+
 app_start:
 	mov dword [int_handler_addr], interrupt_handler
 	mov dword [fat_cache_sector], 0xFFFFFFFF
 
-	sub esp, 20
-	mov dword [esp + 8], target_name
-	lea eax, [esp + 12]
-	mov [esp + 4], eax
-	lea eax, [esp + 16]
-	mov [esp], eax
+	push target_name
+	push size_left
+	push current_cluster
 	call search_file
 	add esp, 12
+	test eax, eax
+	jz main_search_found
+	; not found or error
+	cmp eax, 0
+	jl main_search_not_found
 	push eax
+	push disk_read_ng_mes
+	call putstr
+	add esp, 4
 	call printhex
-	mov dword [esp], ' '
+	mov dword [esp], 0x0D
 	call putchar
-	mov eax, [esp + 4] ; file size
-	mov [esp], eax
-	call printhex
-	mov dword [esp], ' '
+	mov dword [esp], 0x0A
 	call putchar
-	mov eax, [esp + 8] ; cluster number
-	mov [esp], eax
-	call printhex
-	mov dword [esp], ' '
-	call putchar
-	mov eax, [esp + 8]
-	mov [esp], eax
+	add eax, 4
+	jmp exit
+main_search_not_found:
+	push target_name
+	call putstr
+	mov dword [esp], target_not_found_mes
+	call putstr
+	add eax, 4
+	jmp exit
+main_search_found:
+	; read file
+	mov ebx, 0x100000
+	mov eax, [cluster_size]
+	mov [sector_left], eax
+	push dword [current_cluster]
+	call cluster_to_first_sector
+	add esp, 4
+	mov [current_sector], eax
+	mov dword [next_physical_addr], 0x100000
+	mov eax, [size_left]
+	test eax, eax
+	jz main_read_file_end ; don't read if size is zero
+main_read_file_loop:
+	; allocate memory
+	push ebx
+	call make_sure_page
+	add esp, 4
+	; read disk
+	push dword [current_sector]
+	push ebx
+	call read_sector
+	add esp, 8
+	test eax, eax
+	jnz main_read_disk_failed
+	; proceed to next sector
+	add ebx, 0x0200
+	sub dword [size_left], 0x0200
+	jbe main_read_file_end ; read all contents?
+	inc dword [current_sector]
+	dec dword [sector_left]
+	jnz main_read_file_loop
+	; proceed to next cluster
+	push dword [current_cluster]
 	call read_fat
-	mov [esp], eax ; next cluster number
+	add esp, 4
+	cmp eax, 1
+	jle main_fat_read_failed
+	cmp eax, 0xFFF7
+	jge main_fat_read_failed
+	mov [current_cluster], eax
+	push eax
+	; convert clusteer number to sector number
+	call cluster_to_first_sector
+	add esp, 4
+	mov [current_sector], eax
+	; reset sectr number left
+	mov eax, [cluster_size]
+	mov [sector_left], eax
+	jmp main_read_file_loop
+main_read_file_end:
+	; execute loaded program
+	mov eax, 0x100000
+	jmp eax
+
+main_read_disk_failed:
+	push eax
+	push disk_read_ng_mes
+	call putstr
+	add esp, 4
 	call printhex
+	mov dword [esp], 0x0D
+	call putchar
+	mov dword [esp], 0x0A
+	call putchar
+	add esp, 4
+	jmp exit
+
+main_fat_read_failed:
+	push eax
+	push read_fat_ng_mes
+	call putstr
+	add esp, 4
+	call printhex
+	mov dword [esp], 0x0D
+	call putchar
+	mov dword [esp], 0x0A
+	call putchar
+	add esp, 4
 
 exit:
 	cli
@@ -897,8 +1039,14 @@ disk_init_ng_mes:
 disk_read_ng_mes:
 	db 'disk_read failed : ', 0
 
+target_not_found_mes:
+	db ' not found', 13, 10, 0
+
+read_fat_ng_mes:
+	db 'read_fat failed : ', 0
+
 target_name:
-	db 'program.bin'
+	db 'program.bin', 0
 
 absolute 0x7C00
 bpb_jmp_ope_code:        resb 3
@@ -947,3 +1095,9 @@ fat_cache_sector: resd 1
 fat_cache: resb 0x200
 
 search_file_buffer: resb 0x200
+
+next_physical_addr: resd 1
+current_cluster: resd 1
+current_sector: resd 1
+size_left: resd 1
+sector_left: resd 1
