@@ -684,15 +684,17 @@ read_fat_end:
 search_file:
 	push ebp
 	mov ebp, esp
-	; int [ebp - 4] : save ESI
-	; int [ebp - 8] : save EDI
-	mov [ebp - 4], esi
-	mov [ebp - 8], edi
-	; char [ebp - 20][12] : file name on RDE to search
-	; int [ebp - 24] : entries left in this secctor
-	; int [ebp - 28] : entries left
-	; int [ebp - 32] : current sector number
-	sub esp, 32
+	; int [ebp - 4] : save EBX
+	; int [ebp - 8] : save ESI
+	; int [ebp - 12] : save EDI
+	mov [ebp - 4], ebx
+	mov [ebp - 8], esi
+	mov [ebp - 12], edi
+	; char [ebp - 24][12] : file name on RDE to search
+	; int [ebp - 28] : entries left in this sector
+	; int [ebp - 32] : entries left
+	; int [ebp - 36] : next sector number
+	sub esp, 36
 	; check if name is NULL
 	mov esi, [ebp + 16]
 	test esi, esi
@@ -700,12 +702,12 @@ search_file:
 	; convert name to format for RDE
 	mov al, ' '
 	mov ecx, 11
-	lea edi, [ebp - 20]
+	lea edi, [ebp - 24]
 	rep stosb
 	; save filename
 	mov ecx, 8
 	mov esi, [ebp + 16]
-	lea edi, [ebp - 20]
+	lea edi, [ebp - 24]
 search_file_convert_filename:
 	lodsb
 	; delimiter of filename and extension
@@ -736,7 +738,7 @@ search_file_convert_filename_end:
 	; save extension
 	mov ecx, 3
 	; no need to change ESI
-	lea edi, [ebp - 12] ; [ebp - 20 + 8]
+	lea edi, [ebp - 16] ; [ebp - 24 + 8]
 search_file_convert_extension:
 	lodsb
 	; end of string
@@ -752,27 +754,70 @@ search_file_extension_no_toupper:
 	stosb
 	loop search_file_convert_extension
 search_file_convert_extension_end:
-	; test
-	mov byte [ebp - 9], 0
-	push '"'
-	call putchar
-	lea eax, [ebp - 20]
-	mov [esp], eax
-	call putstr
-	mov dword [esp], '"'
-	call putchar
-	mov dword [esp], 0x0D
-	call putchar
-	mov dword [esp], 0x0A
-	call putchar
-	add esp, 4
-	jmp search_file_end
 	; calculate first sector number of RDE
 	mov eax, [fat_size]
 	mul dword [fat_number]
 	add eax, [fat_begin_sector]
+	mov [ebp - 36], eax
+	;initialize number of entry
+	mov eax, [root_entry_size]
 	mov [ebp - 32], eax
+	mov dword [ebp - 28], 0
+	mov ebx, search_file_buffer
+	; read RDE and search
+search_file_scan:
+	cmp dword [ebp - 32], 0
+	jle search_file_not_found ; ran out of entry
+	cmp dword [ebp - 28], 0
+	jg search_file_scan_not_read ; ran out of entry in this sector
+	mov eax, [ebp - 36]
+	push eax
+	push search_file_buffer
+	call read_sector
+	add esp, 8
+	test eax, eax
+	jz search_file_scan_read_success
 	jmp search_file_end
+search_file_scan_read_success:
+	inc dword [ebp - 36]
+	mov dword [ebp - 28], 16
+	mov ebx, search_file_buffer
+search_file_scan_not_read:
+	; check attribute
+	mov al, [ebx + 11]
+	test al, 0x08
+	jnz search_file_not_match ; ignore volume label
+	; check filename
+	lea esi, [ebp - 24]
+	mov edi, ebx
+	mov ecx, 11
+	repz cmpsb
+	jnz search_file_not_match
+	; found
+	; store cluster number
+	mov ecx, [ebp + 8]
+	test ecx, ecx
+	jz search_file_omit_cluster
+	mov ax, [ebx + 26]
+	movzx eax, ax
+	mov [ecx], eax
+search_file_omit_cluster:
+	; store file size
+	mov ecx, [ebp + 12]
+	test ecx, ecx
+	jz search_file_omit_size
+	mov eax, [ebx + 28]
+	mov [ecx], eax
+search_file_omit_size:
+	; return 0
+	xor eax, eax
+	jmp search_file_end
+search_file_not_match:
+	; see next file
+	dec dword [ebp - 28]
+	dec dword [ebp - 32]
+	add ebx, 32
+	jmp search_file_scan
 search_file_not_found:
 	mov eax, -1
 search_file_end:
@@ -812,23 +857,33 @@ app_start:
 	mov dword [int_handler_addr], interrupt_handler
 	mov dword [fat_cache_sector], 0xFFFFFFFF
 
-	push ruler
-	call putstr
-	add esp, 4
-	push test1
-	push 0
-	push 0
+	sub esp, 20
+	mov dword [esp + 8], target_name
+	lea eax, [esp + 12]
+	mov [esp + 4], eax
+	lea eax, [esp + 16]
+	mov [esp], eax
 	call search_file
-	mov dword [esp + 8], test2
-	call search_file
-	mov dword [esp + 8], test3
-	call search_file
-	mov dword [esp + 8], test4
-	call search_file
-	mov dword [esp + 8], test5
-	call search_file
-	mov dword [esp + 8], test6
-	call search_file
+	add esp, 12
+	push eax
+	call printhex
+	mov dword [esp], ' '
+	call putchar
+	mov eax, [esp + 4] ; file size
+	mov [esp], eax
+	call printhex
+	mov dword [esp], ' '
+	call putchar
+	mov eax, [esp + 8] ; cluster number
+	mov [esp], eax
+	call printhex
+	mov dword [esp], ' '
+	call putchar
+	mov eax, [esp + 8]
+	mov [esp], eax
+	call read_fat
+	mov [esp], eax ; next cluster number
+	call printhex
 
 exit:
 	cli
@@ -836,19 +891,14 @@ stop_loop:
 	hlt
 	jmp stop_loop
 
-ruler: db '"0123456789A"', 13, 10, 0
-test1: db 'test.txt', 0
-test2: db 'tesuto', 0
-test3: db 'hogehogehoge.txt', 0
-test4: db 'hoge.text', 0
-test5: db '.abc', 0
-test6: db 'ABC$!.tXt', 0
-
 disk_init_ng_mes:
 	db 'disk_init failed : ', 0
 
 disk_read_ng_mes:
 	db 'disk_read failed : ', 0
+
+target_name:
+	db 'program.bin'
 
 absolute 0x7C00
 bpb_jmp_ope_code:        resb 3
