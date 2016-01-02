@@ -890,11 +890,11 @@ make_sure_page:
 	mov edx, [pde_addr + eax] ; load PDE to EDX
 	test edx, 1
 	jnz make_sure_page_pde_exist
-	; the page directly doesn't exit
+	; the page directry doesn't exit
 	mov edx, [next_physical_addr] ; get next address of memory
 	add dword [next_physical_addr], 0x1000
 	or edx, 3
-	mov [pde_addr + eax], edx ; create page directly
+	mov [pde_addr + eax], edx ; create page directry
 make_sure_page_pde_exist:
 	; make the page table accessable
 	or edx, 3
