@@ -263,7 +263,18 @@ int_hardware_start:
 	jz int_hardware_none
 	call eax
 int_hardware_none:
-	add esp, 4 ; remove interrupt number as argument
+	pop ecx ; remove interrupt number as argument
+	; send EOI to PIC if needed
+	cmp ecx, 0x20
+	jb int_hardware_no_eoi
+	cmp ecx, 0x30
+	jae int_hardware_no_eoi
+	mov al, 0b0010_0000
+	out 0x20, al ; send EOI to master PIC
+	cmp ecx, 0x28
+	jb int_hardware_no_eoi
+	out 0xA0, al ; ssend EOI to slave PIC
+int_hardware_no_eoi:
 	popa
 	; remove interrupt number if error code is likely to exist
 	cmp dword [esp], 8
