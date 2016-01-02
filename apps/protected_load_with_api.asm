@@ -1,6 +1,23 @@
 ; enable paging and interrupt, and load "PROGRAM.BIN" to 0x100000
 ; then jump to 0x100000
 
+; API via interrupt
+; user interrupt handler: int func(int intno, int *registers)
+; return 0 if want to have this system handle the interrupt
+; return non-zero if handling of the interrupt is done
+; registers = pushed by PUSHA
+; {EDI, ESI, EBP, (ESP), EBX, EDX, ECX, EAX}
+; writing to elements of registers will affect values in callee
+
+; won't handled by user interrupt handler
+;   int 0x30 - 0x3A : mapped to BIOS call 0x10 - 0x1A
+;   int 0x3B - 0x3F : reserved for API
+
+; may be handled by uer interrupt handler
+;   int 0x00 - 0x1F : traps
+;   int 0x20 - 0x2F : hardware interrupts
+;   int 0x40 - 0x4F : software interrupts
+
 bits 16
 org 0x0500
 
@@ -256,14 +273,13 @@ int_hardware_delta:
 int_hardware_start:
 	cli
 	pusha
-	mov eax, [esp + 32]
+	mov eax, [esp + 32] ; interrupt number
+	mov ecx, esp ; pointer to value of registers
+	push ecx
 	push eax
-	mov eax, [int_handler_addr]
-	test eax, eax
-	jz int_hardware_none
-	call eax
+	call sys_interrupt_handler
 int_hardware_none:
-	add esp, 4 ; remove interrupt number as argument
+	add esp, 8 ; remove arguments
 	; send EOI to PIC if needed
 	mov ecx, [esp + 32]
 	cmp ecx, 0x20
@@ -401,6 +417,9 @@ pstart:
 	mov gs, ax
 	mov esp, initial_stack
 
+	; initialize user interrupt handler
+	mov dword [user_interrupt_handler], 0
+
 	; initialize master PIC
 	mov al, 0b00010001 ; ICW1
 	out 0x20, al
@@ -425,7 +444,6 @@ pstart:
 	out 0xA1, al
 
 	; initialize IDT
-	mov dword [int_handler_addr], 0
 	mov ax, 0b10001_110_000_00000
 	mov ebx, idt_addr ; the address of entry in table
 	mov edx, int_hardware ; where to jump on interrupt
@@ -868,17 +886,79 @@ search_file_end:
 	leave
 	ret
 
-interrupt_handler:
+	; void sys_interrupt_handler(int intno, int *registers)
+	; registers = pushed by PUSHA
+	; {EDI, ESI, EBP, (ESP), EBX, EDX, ECX, EAX}
+	; writing to elements of registers will affect values in callee
+sys_interrupt_handler:
 	push ebp
 	mov ebp, esp
 	push ebx
+	push esi
+	push edi
 	mov eax, [ebp + 8]
-	cmp eax, 0x20
-	jae interrupt_handler_ret
-	push interrupt_message
+	cmp eax, 0x30
+	jle sys_interrupt_handler_not_api
+	cmp eax, 0x40
+	jge sys_interrupt_handler_not_api
+	; int 0x30 - 0x3A : map to BIOS int 0x10- 0x1A
+	; int 0x3B - 0x3F : API
+	cmp eax, 0x3A
+	jg sys_interrupt_handler_api
+	; BIOS call
+	sub eax, 0x20
+	push eax
+	mov ebx, [ebp + 12]
+	mov eax, [ebx + 16]
+	push eax
+	mov eax, [ebx + 28]
+	mov ecx, [ebx + 24]
+	mov edx, [ebx + 20]
+	mov ebp, [ebx + 8]
+	mov esi, [ebx + 4]
+	mov edi, [ebx]
+	pop ebx
+	call soft_int
+	push ebx
+	mov ebx, [ebp + 12]
+	mov [ebx + 28], eax
+	mov [ebx + 24], ecx
+	mov [ebx + 20], edx
+	mov [ebx + 8], ebp
+	mov [ebx + 4], esi
+	mov [ebx], edi
+	pop eax
+	mov [ebx + 16], eax
+	jmp sys_interrupt_handler_ret
+sys_interrupt_handler_api:
+	; API
+	; reserved
+	mov eax, -1
+	jmp sys_interrupt_handler_ret
+sys_interrupt_handler_not_api:
+	; trap, hardware interrupt, user interrupt
+	xor eax, eax
+	mov ebx, [user_interrupt_handler]
+	test ebx, ebx
+	jz sys_interrupt_handler_no_user
+	mov ecx, [ebp + 8]
+	mov edx, [ebp + 12]
+	push edx
+	push ecx
+	call ebx
+	add esp, 8
+sys_interrupt_handler_no_user:
+	test eax, eax
+	jnz sys_interrupt_handler_ret
+	; default interrupt handling
+	; 0x00 - 0x1F (trap) : print number and stop
+	; 0x20 - 0x2F (hardware), 0x40 - 0xFF (software) : do nothing
+	mov ebx, [ebp + 8]
+	cmp ebx, 0x20
+	jae sys_interrupt_handler_ret
+	push trap_message
 	call putstr
-	mov eax, [ebp + 8]
-	mov [esp], eax
+	mov [esp], ebx
 	call printhex
 	mov dword [esp], 0x0D
 	call putchar
@@ -886,12 +966,14 @@ interrupt_handler:
 	call putchar
 	add esp, 4
 	jmp exit
-interrupt_handler_ret:
+sys_interrupt_handler_ret:
+	pop edi
+	pop esi
 	pop ebx
 	leave
 	ret
 
-interrupt_message:
+trap_message:
 	db 13, 10, 'Trap : ', 0
 
 	; void make_sure_page(void* address)
@@ -946,7 +1028,6 @@ make_sure_page_pte_exist:
 	ret
 
 app_start:
-	mov dword [int_handler_addr], interrupt_handler
 	mov dword [fat_cache_sector], 0xFFFFFFFF
 
 	push target_name
@@ -1119,7 +1200,7 @@ si_int_addr: resw 1
 si_idt: resb 6
 si_idt_zero: resb 6
 
-int_handler_addr: resd 1
+user_interrupt_handler: resd 1
 
 fat_cache_sector: resd 1
 fat_cache: resb 0x200
