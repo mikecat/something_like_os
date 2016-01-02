@@ -1,0 +1,1 @@
+CFLAGS=-s -static -nostdlib
