@@ -1,9 +1,11 @@
 bits 32
 org 0x100000
 
+TEST_NUM equ 4000000
+
 start:
 	mov ebx, data
-	mov ecx, 10000000
+	mov ecx, TEST_NUM
 	xor edx, edx
 check_loop:
 	mov eax, [ebx]
@@ -13,17 +15,15 @@ check_loop:
 	inc edx
 	loop check_loop
 
-	cli
-ok:
-	hlt
-	jmp ok
+	; test passed
+	int 0
 
 ng:
 	int 8
 
 data:
 %assign i 0
-%rep 4000000
+%rep TEST_NUM
 	dd i
 %assign i i+1
 %endrep
