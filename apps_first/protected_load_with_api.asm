@@ -2,6 +2,18 @@
 ; then jump to 0x100000
 
 ; API via interrupt
+;   int 0x3B : config user interrupt handler
+;     EAX = 0 : set user interrupt handler
+;       parameters
+;         EBX : address of user interrupt handler to set
+;       return data
+;         EAX : the address of user interrupt handler set (=EBX)
+;     EAX = 1 : get user interrupt handler
+;       parameters
+;         (none)
+;       return data
+;         EAX : the address of user interrupt handler
+
 ; user interrupt handler: int func(int intno, int *registers)
 ; return 0 if want to have this system handle the interrupt
 ; return non-zero if handling of the interrupt is done
@@ -932,6 +944,14 @@ sys_interrupt_handler:
 	jmp sys_interrupt_handler_ret
 sys_interrupt_handler_api:
 	; API
+	cmp eax, 0x3B
+	jne sys_interrupt_handler_api_not_3b
+	mov ecx, [ebp + 12]
+	push ecx
+	call sys_interrupt_config_handler
+	add esp, 4
+	jmp sys_interrupt_handler_ret
+sys_interrupt_handler_api_not_3b:
 	; reserved
 	mov eax, -1
 	jmp sys_interrupt_handler_ret
@@ -975,6 +995,32 @@ sys_interrupt_handler_ret:
 
 trap_message:
 	db 13, 10, 'Trap : ', 0
+
+	; void sys_interrupt_config_handler(int *registers)
+sys_interrupt_config_handler:
+	push ebp
+	mov ebp, esp
+	mov ecx, [ebp + 8]
+	mov eax, [ecx + 28]
+	cmp eax, 0
+	jne sys_interrupt_config_handler_not_0
+	; set user interrupt handler
+	mov edx, [ecx + 24]
+	mov [user_interrupt_handler], edx
+	mov [ecx + 28], edx
+	jmp sys_interrupt_config_handler_ret
+sys_interrupt_config_handler_not_0:
+	cmp eax, 1
+	jne sys_interrupt_config_handler_not_1
+	; get user interrupt handler
+	mov edx, [user_interrupt_handler]
+	mov [ecx + 28], edx
+	jmp sys_interrupt_config_handler_ret
+sys_interrupt_config_handler_not_1:
+	mov dword [ecx + 28], -1
+sys_interrupt_config_handler_ret:
+	leave
+	ret
 
 	; void make_sure_page(void* address)
 make_sure_page:
