@@ -883,6 +883,8 @@ interrupt_message:
 make_sure_page:
 	push ebp
 	mov ebp, esp
+	sub esp, 4
+	mov byte [ebp - 4], 0 ; whether initialization of the page table is needed
 	mov ecx, [ebp + 8]
 	mov eax, ecx
 	shr eax, 22
@@ -895,10 +897,23 @@ make_sure_page:
 	add dword [next_physical_addr], 0x1000
 	or edx, 3
 	mov [pde_addr + eax], edx ; create page directry
+	mov byte [ebp - 4], 1
 make_sure_page_pde_exist:
 	; make the page table accessable
 	or edx, 3
 	mov [pte_addr + ((pte_window_addr >> 12) << 2)], edx
+	; initialize page table if needed
+	cmp byte [ebp - 4], 0
+	je make_sure_page_no_initialize
+	push edi
+	push ecx
+	mov edi, pte_window_addr
+	mov ecx, 0x400
+	xor eax, eax
+	rep stosd
+	pop ecx
+	pop edi
+make_sure_page_no_initialize:
 	; check the page
 	mov eax, ecx
 	shr eax, 12
