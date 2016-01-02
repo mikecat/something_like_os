@@ -1,3 +1,6 @@
+; draw check puttern by writing to VRAM from protected mode,
+; then switch to real mode again and draw string via BIOS call
+
 bits 16
 org 0x0500
 

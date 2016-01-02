@@ -1,3 +1,5 @@
+; call AH=0x08, int 13h, then print CX and DX
+
 bits 16
 cpu 8086
 

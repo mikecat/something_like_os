@@ -1,3 +1,5 @@
+; load BPB of "active" pertition to 0x7C00 and jump to 0000:7C00
+
 bits 16
 CPU 8086
 org 0x7A00

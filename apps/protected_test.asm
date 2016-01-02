@@ -1,3 +1,5 @@
+; draw check puttern by writing to VRAM from protected mode
+
 bits 16
 org 0x0500
 

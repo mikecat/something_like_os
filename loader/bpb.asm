@@ -1,3 +1,6 @@
+; load "ENTRY.BIN" from root of FAT16 filesystem to 0x500
+; and jump to 0000:0500
+
 bits 16
 cpu 8086
 org 0x7C00

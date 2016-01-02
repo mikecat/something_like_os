@@ -1,3 +1,5 @@
+; test of loading about 16MB
+
 bits 32
 org 0x100000
 

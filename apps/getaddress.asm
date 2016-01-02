@@ -1,3 +1,5 @@
+; read CS and IP at the beginning of execution and print them
+
 bits 16
 cpu 8086
 

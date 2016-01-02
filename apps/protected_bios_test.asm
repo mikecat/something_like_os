@@ -1,3 +1,5 @@
+; use BIOS call from protected mode
+
 bits 16
 org 0x0500
 

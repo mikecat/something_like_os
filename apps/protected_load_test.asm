@@ -1,3 +1,6 @@
+; enable paging and interrupt, and load "PROGRAM.BIN" to 0x100000
+; then jump to 0x100000
+
 bits 16
 org 0x0500
 
