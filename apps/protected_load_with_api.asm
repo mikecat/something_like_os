@@ -263,8 +263,9 @@ int_hardware_start:
 	jz int_hardware_none
 	call eax
 int_hardware_none:
-	pop ecx ; remove interrupt number as argument
+	add esp, 4 ; remove interrupt number as argument
 	; send EOI to PIC if needed
+	mov ecx, [esp + 32]
 	cmp ecx, 0x20
 	jb int_hardware_no_eoi
 	cmp ecx, 0x30
