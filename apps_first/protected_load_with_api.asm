@@ -1325,70 +1325,159 @@ free_page:
 	leave
 	ret
 
-	; void make_sure_page(void* address)
-make_sure_page:
+	; void read_pmem(void *vdest, const void *psrc, unsigned int size)
+	; read from physical memory
+read_pmem:
 	push ebp
 	mov ebp, esp
 	pushf
 	cli ; don't allow interrupt while using window
-	mov eax, cr3
-	push eax
+	push ebx
+	push esi
+	push edi
+	mov ebx, [ebp + 12]
+	and ebx, 0xFFFFF000
+	push ebx
 	call set_window
 	add esp, 4
+	mov esi, [ebp + 12]
+	and esi, 0xFFF
+	add esi, physical_window_addr
+	mov edi, [ebp + 8]
+	mov ecx, [ebp + 16]
+read_pmem_loop:
+	cmp esi, physical_window_addr + 0x1000
+	jb read_pmem_loop_not_next
+	add ebx, 0x1000
+	push ecx
+	push ebx
+	call set_window
+	add esp, 4
+	pop ecx
+	sub esi, 0x1000
+read_pmem_loop_not_next:
+	movsb
+	loop read_pmem_loop
+	pop edi
+	pop esi
+	pop ebx
+	popf
+	leave
+	ret
+
+	; void write_pmem(void *pdest, const void *vsrc, unsigned int size)
+	; write to physical memory
+write_pmem:
+	push ebp
+	mov ebp, esp
+	pushf
+	cli ; don't allow interrupt while using window
+	push ebx
+	push esi
+	push edi
+	mov ebx, [ebp + 8]
+	and ebx, 0xFFFFF000
+	push ebx
+	call set_window
+	add esp, 4
+	mov esi, [ebp + 12]
+	mov edi, [ebp + 8]
+	and edi, 0xFFF
+	add edi, physical_window_addr
+	mov ecx, [ebp + 16]
+write_pmem_loop:
+	cmp edi, physical_window_addr + 0x1000
+	jb write_pmem_loop_not_next
+	add ebx, 0x1000
+	push ecx
+	push ebx
+	call set_window
+	add esp, 4
+	pop ecx
+	sub edi, 0x1000
+write_pmem_loop_not_next:
+	movsb
+	loop write_pmem_loop
+	pop edi
+	pop esi
+	pop ebx
+	popf
+	leave
+	ret
+
+	; void make_sure_page(void* address)
+make_sure_page:
+	push ebp
+	mov ebp, esp
+	; [ebp - 4] : buffer for read/write physical memory
+	; [ebp - 8] : address of PDE
+	; [ebp - 12] : address of PTE
+	; [ebp - 16] : data of PDE
+	sub esp, 28
+	; calculate address of PDE
+	mov ecx, cr3
+	and ecx, 0xFFFFF000
 	mov eax, [ebp + 8]
 	shr eax, 22
 	shl eax, 2
-	mov edx, [physical_window_addr + eax] ; load PDE to EDX
+	add eax, ecx
+	; read PDE
+	mov [ebp - 8], eax
+	mov dword [esp + 8], 4
+	mov [esp + 4], eax
+	lea eax, [ebp - 4]
+	mov [esp], eax
+	call read_pmem
+	mov edx, [ebp - 4]
+	mov [ebp - 16], edx
 	test edx, 1
 	jnz make_sure_page_pde_exist
-	; the page directry doesn't exit
-	push eax
+	; create new page table
 	call allocate_page
 	test eax, eax
 	jz make_sure_page_failed
-	push eax
-	; set window again because it may be changed in other functions
-	mov eax, cr3
-	push eax
-	call set_window
-	add esp, 4
 	; set present and writable flags
-	pop edx
-	or edx, 3
-	pop eax
-	mov [physical_window_addr + eax], edx ; create page table
+	and eax, 0xFFFFF000
+	or eax, 3
+	mov [ebp - 16], eax
+	mov dword [esp + 8], 4
+	lea eax, [ebp - 16]
+	mov [esp + 4], eax
+	mov eax, [ebp - 8]
+	mov [esp], eax
+	call write_pmem ; update PDE
 make_sure_page_pde_exist:
-	; make the page table accessable
-	and edx, 0xFFFFF000
-	push edx
-	push edx
-	call set_window
-	add esp, 4
-	pop edx
 	; check the page
+	mov dword [esp + 8], 4
 	mov eax, [ebp + 8]
 	shr eax, 12
 	and eax, 0x3FF
 	shl eax, 2
-	mov ecx, [physical_window_addr + eax]
-	test ecx, 1
+	mov ecx, [ebp - 16]
+	and ecx, 0xFFFFF000
+	add eax, ecx
+	mov [ebp - 12], eax
+	mov [esp + 4], eax
+	lea eax, [ebp - 4]
+	mov [esp], eax
+	call read_pmem
+	mov eax, [ebp - 4]
+	test eax, 1
 	jnz make_sure_page_pte_exist
-	push eax ; save eax (1)
-	push edx ; save edx (2)
+	; create new page
 	call allocate_page
 	test eax, eax
 	jz make_sure_page_failed
-	pop edx ; restore saved edx (2)
-	push eax ; save eax (later used as edx) (3)
-	push edx ; argument for set_window (4)
-	call set_window
-	add esp, 4 ; remove the argument (4)
-	pop edx ; restore saved eax to edx (4)
-	pop eax ; restore saved eax (1)
-	or edx, 3 ; edx = physical address of allocated page | flags
-	mov [physical_window_addr + eax], edx
+	and eax, 0xFFFFF000
+	or eax, 3
+	mov [ebp - 4], eax
+	mov dword [esp + 8], 4
+	lea eax, [ebp - 4]
+	mov [esp + 4], eax
+	mov eax, [ebp - 12]
+	mov [esp], eax
+	call write_pmem
 make_sure_page_pte_exist:
-	popf
 	leave
 	ret
 
