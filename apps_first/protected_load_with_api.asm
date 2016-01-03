@@ -14,7 +14,7 @@
 ;       return data
 ;         EAX : the address of user interrupt handler
 
-; user interrupt handler: int func(int intno, int *registers)
+; user interrupt handler: int func(int intno, unsigned int *registers)
 ; return 0 if want to have this system handle the interrupt
 ; return non-zero if handling of the interrupt is done
 ; registers = pushed by PUSHA
@@ -898,7 +898,7 @@ search_file_end:
 	leave
 	ret
 
-	; void sys_interrupt_handler(int intno, int *registers)
+	; void sys_interrupt_handler(int intno, unsigned int *registers)
 	; registers = pushed by PUSHA
 	; {EDI, ESI, EBP, (ESP), EBX, EDX, ECX, EAX}
 	; writing to elements of registers will affect values in callee
@@ -996,7 +996,7 @@ sys_interrupt_handler_ret:
 trap_message:
 	db 13, 10, 'Trap : ', 0
 
-	; void sys_interrupt_config_handler(int *registers)
+	; void sys_interrupt_config_handler(unsigned int *registers)
 sys_interrupt_config_handler:
 	push ebp
 	mov ebp, esp
