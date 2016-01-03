@@ -1322,6 +1322,8 @@ make_sure_page:
 	; the page directry doesn't exit
 	push eax
 	call allocate_page
+	test eax, eax
+	jz make_sure_page_failed
 	push eax
 	; set window again because it may be changed in other functions
 	mov eax, cr3
@@ -1352,6 +1354,8 @@ make_sure_page_pde_exist:
 	push eax ; save eax (1)
 	push edx ; save edx (2)
 	call allocate_page
+	test eax, eax
+	jz make_sure_page_failed
 	pop edx ; restore saved edx (2)
 	push eax ; save eax (later used as edx) (3)
 	push edx ; argument for set_window (4)
@@ -1365,6 +1369,15 @@ make_sure_page_pte_exist:
 	popf
 	leave
 	ret
+
+make_sure_page_failed:
+	push make_sure_page_failed_message
+	call putstr
+	add esp, 4
+	jmp exit
+
+make_sure_page_failed_message:
+	db 13, 10, 'allocate_page() failed!', 13, 10, 0
 
 app_start:
 	mov dword [fat_cache_sector], 0xFFFFFFFF
