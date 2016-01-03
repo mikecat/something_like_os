@@ -1016,7 +1016,7 @@ sys_interrupt_handler:
 	push edi
 	mov eax, [ebp + 8]
 	cmp eax, 0x30
-	jle sys_interrupt_handler_not_api
+	jl sys_interrupt_handler_not_api
 	cmp eax, 0x40
 	jge sys_interrupt_handler_not_api
 	; int 0x30 - 0x3A : map to BIOS int 0x10- 0x1A
@@ -1025,6 +1025,7 @@ sys_interrupt_handler:
 	jg sys_interrupt_handler_api
 	; BIOS call
 	sub eax, 0x20
+	push ebp
 	push eax
 	mov ebx, [ebp + 12]
 	mov eax, [ebx + 16]
@@ -1038,18 +1039,22 @@ sys_interrupt_handler:
 	pop ebx
 	call soft_int
 	pushf
+	push ebp
 	push ebx
+	mov ebp, [esp + 12]
 	mov ebx, [ebp + 12]
 	mov [ebx + 28], eax
 	mov [ebx + 24], ecx
 	mov [ebx + 20], edx
-	mov [ebx + 8], ebp
 	mov [ebx + 4], esi
 	mov [ebx], edi
 	pop eax
 	mov [ebx + 16], eax
 	pop eax
+	mov [ebx + 8], eax
+	pop eax
 	mov [last_bios_eflags], eax
+	add esp, 4 ; remove saved EBP from the stack
 	jmp sys_interrupt_handler_ret
 sys_interrupt_handler_api:
 	; API
