@@ -61,10 +61,10 @@ org 0x0500
 initial_stack equ 0x1FFF0
 stack_end equ 0x10000
 
-pde_addr equ 0x20000
-pte_addr equ 0x21000
-pte_window_addr equ 0x22000
-idt_addr equ 0x23000
+physical_window_addr equ 0x20000
+pde_addr equ 0x21000
+pte_addr equ 0x22000
+idt_addr equ 0x24000
 
 start:
 	cli
@@ -453,8 +453,10 @@ pstart:
 	mov gs, ax
 	mov esp, initial_stack
 
-	; initialize user interrupt handler
+	; initialize parameters
 	mov dword [user_interrupt_handler], 0
+	mov dword [next_free_pmem], 0
+	mov dword [next_new_pmem], 0x100000
 
 	; initialize master PIC
 	mov al, 0b00010001 ; ICW1
@@ -527,9 +529,13 @@ init_pte_loop2:
 	loop init_pte_loop2
 	; protect data from stack becoming too big by removing a page
 	and dword [pte_addr + ((stack_end >> 12) << 2)], 0xFFFFFFFC
-	; enable paging
+	; set address of page directry
 	mov eax, pde_addr
 	mov cr3, eax
+	; enable paging
+	mov eax, cr0
+	or eax, 0x80000000
+	mov cr0, eax
 
 	; initialize screen
 	mov ax, 0x0003
@@ -1167,54 +1173,196 @@ sys_disk_control_ret:
 	leave
 	ret
 
+	; void set_window(void* addr)
+	; set window to acccess physical page addr
+set_window:
+	push ebp
+	mov ebp, esp
+	pushf
+	cli ; don't allow interrupt while paging is disabled
+	mov edx, [ebp + 8] ; where to be accessed
+	; disable paging
+	mov eax, cr0
+	and eax, 0x7FFFFFFF
+	mov cr0, eax
+	; calculate address to put
+	mov eax, cr3
+	and eax, 0xFFFFF000
+	mov eax, [eax] ; first entry of PDE
+	test eax, 1
+	jz set_window_error_not_available
+	test eax, 0x80
+	jnz set_window_error_4m
+	and eax, 0xFFFFF000 ; address of PTE
+	; calculate value to put
+	and edx, 0xFFFFF000
+	or edx, 3
+	; put the address to PTE
+	mov [eax + ((physical_window_addr >> 12) << 2)], edx
+	; enable paging
+	mov eax, cr0
+	or eax, 0x80000000
+	mov cr0, eax
+	popf
+	leave
+	ret
+
+set_window_error_not_available:
+	mov edx, set_window_error_not_available_message
+	jmp set_window_error
+set_window_error_4m:
+	mov edx, set_window_error_4m_message
+set_window_error:
+	; enable paging
+	mov eax, cr0
+	or eax, 0x80000000
+	mov cr0, eax
+	; show error message
+	push edx
+	call putstr
+	add esp, 4
+	; halt
+	jmp exit
+
+set_window_error_not_available_message:
+	db 13, 10, "FATAL ERROR: PTE for window doesn't exist!", 13, 10, 0
+
+set_window_error_4m_message:
+	db 13, 10, 'FATAL ERROR: 4M page is used as PDE for window!', 13, 10, 0
+
+	; void* allocate_page(void)
+	; allocate one physical page, clear the page to zero
+	; and return its physical address
+	; if available page isn't found, return 0
+allocate_page:
+	push ebp
+	mov ebp, esp
+	; save registers
+	pushf
+	push ebx
+	push esi
+	push edi
+	cli ; don't allow interrupt while using window
+	; check if freed page exists
+	mov eax, [next_free_pmem]
+	test eax, eax
+	jz allocate_page_new
+	; get memory from freed page
+	push eax
+	call set_window
+	add esp, 4
+	mov ecx, [physical_window_addr]
+	mov [next_free_pmem], ecx
+	jmp allocate_page_end
+allocate_page_new:
+	; allocate new physical memory
+	; check if the memory is available
+	mov eax, [next_new_pmem]
+	push eax
+	call set_window
+	add esp, 4
+	xor eax, eax
+	mov edi, physical_window_addr
+	mov ecx, 0x400
+allocate_page_check_write_loop:
+	stosd
+	inc eax
+	loop allocate_page_check_write_loop
+	xor ebx, ebx
+	mov esi, physical_window_addr
+	mov ecx, 0x400
+allocate_page_check_read_loop:
+	lodsd
+	cmp eax, ebx
+	jne allocate_page_error
+	inc ebx
+	loop allocate_page_check_read_loop
+	; memory check OK
+	mov eax, [next_new_pmem]
+	add dword [next_new_pmem], 0x1000
+	jmp allocate_page_end
+allocate_page_error:
+	xor eax, eax
+allocate_page_end:
+	; clear the page to zero
+	; the new physical page has already been set to window
+	test eax, eax
+	jz allocate_page_failed
+	mov ebx, eax
+	xor eax, eax
+	mov ecx, 0x400
+	mov edi, physical_window_addr
+	rep stosd
+	mov eax, ebx
+allocate_page_failed:
+	; restore registers
+	pop edi
+	pop esi
+	pop ebx
+	popf
+	leave
+	ret
+
 	; void make_sure_page(void* address)
 make_sure_page:
 	push ebp
 	mov ebp, esp
-	sub esp, 4
-	mov byte [ebp - 4], 0 ; whether initialization of the page table is needed
-	mov ecx, [ebp + 8]
-	mov eax, ecx
+	pushf
+	cli ; don't allow interrupt while using window
+	mov eax, cr3
+	push eax
+	call set_window
+	add esp, 4
+	mov eax, [ebp + 8]
 	shr eax, 22
 	shl eax, 2
-	mov edx, [pde_addr + eax] ; load PDE to EDX
+	mov edx, [physical_window_addr + eax] ; load PDE to EDX
 	test edx, 1
 	jnz make_sure_page_pde_exist
 	; the page directry doesn't exit
-	mov edx, [next_physical_addr] ; get next address of memory
-	add dword [next_physical_addr], 0x1000
+	push eax
+	call allocate_page
+	push eax
+	; set window again because it may be changed in other functions
+	mov eax, cr3
+	push eax
+	call set_window
+	add esp, 4
+	; set present and writable flags
+	pop edx
 	or edx, 3
-	mov [pde_addr + eax], edx ; create page directry
-	mov byte [ebp - 4], 1
+	pop eax
+	mov [physical_window_addr + eax], edx ; create page table
 make_sure_page_pde_exist:
 	; make the page table accessable
-	or edx, 3
-	mov [pte_addr + ((pte_window_addr >> 12) << 2)], edx
-	; initialize page table if needed
-	cmp byte [ebp - 4], 0
-	je make_sure_page_no_initialize
-	push edi
-	push ecx
-	mov edi, pte_window_addr
-	mov ecx, 0x400
-	xor eax, eax
-	rep stosd
-	pop ecx
-	pop edi
-make_sure_page_no_initialize:
+	and edx, 0xFFFFF000
+	push edx
+	push edx
+	call set_window
+	add esp, 4
+	pop edx
 	; check the page
-	mov eax, ecx
+	mov eax, [ebp + 8]
 	shr eax, 12
 	and eax, 0x3FF
 	shl eax, 2
-	mov edx, [pte_window_addr + eax]
-	test edx, 1
+	mov ecx, [physical_window_addr + eax]
+	test ecx, 1
 	jnz make_sure_page_pte_exist
-	mov edx, [next_physical_addr]
-	add dword [next_physical_addr], 0x1000
-	or edx, 3
-	mov [pte_window_addr + eax], edx
+	push eax ; save eax (1)
+	push edx ; save edx (2)
+	call allocate_page
+	pop edx ; restore saved edx (2)
+	push eax ; save eax (later used as edx) (3)
+	push edx ; argument for set_window (4)
+	call set_window
+	add esp, 4 ; remove the argument (4)
+	pop edx ; restore saved eax to edx (4)
+	pop eax ; restore saved eax (1)
+	or edx, 3 ; edx = physical address of allocated page | flags
+	mov [physical_window_addr + eax], edx
 make_sure_page_pte_exist:
+	popf
 	leave
 	ret
 
@@ -1258,7 +1406,6 @@ main_search_found:
 	call cluster_to_first_sector
 	add esp, 4
 	mov [current_sector], eax
-	mov dword [next_physical_addr], 0x100000
 	mov eax, [size_left]
 	test eax, eax
 	jz main_read_file_end ; don't read if size is zero
@@ -1394,12 +1541,14 @@ si_idt_zero: resb 6
 user_interrupt_handler: resd 1
 last_bios_eflags: resd 1
 
+next_free_pmem: resd 1 ; freed memory to use before using new memory
+next_new_pmem: resd 1 ; next new memory
+
 fat_cache_sector: resd 1
 fat_cache: resb 0x200
 
 search_file_buffer: resb 0x200
 
-next_physical_addr: resd 1
 current_cluster: resd 1
 current_sector: resd 1
 size_left: resd 1
