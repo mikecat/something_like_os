@@ -318,7 +318,6 @@ int_hardware_remove_error_code:
 	add esp, 4
 int_hardware_no_error_code:
 	add esp, 4 ; remove interrupt number or error code
-	sti
 	iret
 
 align 4
