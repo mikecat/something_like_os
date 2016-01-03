@@ -39,6 +39,32 @@
 ;       return data
 ;         EAX : result (0 : success, non-zero : error code)
 
+;   int 0x3D : memory control
+;     EAX = 0 : allocate a physical page
+;       parameters
+;         (none)
+;       return data
+;         EAX : physical address of allocated page
+;     EAX = 1 : free a physical page
+;       parameters
+;         ECX : physical address of the page tto release
+;       return data
+;         (none)
+;     EAX = 2 : read physical memory
+;       parameters
+;         ECX : virtual address to read into
+;         EDX : physical address to read from
+;         EBX : size to read
+;       return data
+;         (none)
+;     EAX = 3 : write physical memory
+;       parameters
+;         ECX : physical address to write into
+;         EDX : virtual address to write from
+;         EBX : size to read
+;       return data
+;         (none)
+
 ; user interrupt handler: int func(int intno, unsigned int *registers)
 ; return 0 if want to have this system handle the interrupt
 ; return non-zero if handling of the interrupt is done
@@ -1043,6 +1069,14 @@ sys_interrupt_handler_api_not_3b:
 	add esp, 4
 	jmp sys_interrupt_handler_ret
 sys_interrupt_handler_api_not_3c:
+	cmp eax, 0x3D
+	jne sys_interrupt_handler_api_not_3d
+	mov ecx, [ebp + 12]
+	push ecx
+	call sys_memory_control
+	add esp, 4
+	jmp sys_interrupt_handler_ret
+sys_interrupt_handler_api_not_3d:
 	; reserved
 	mov eax, -1
 	jmp sys_interrupt_handler_ret
@@ -1170,6 +1204,60 @@ sys_disk_control_not_2:
 	; unknown
 	mov dword [ecx + 28], -1
 sys_disk_control_ret:
+	leave
+	ret
+
+	; void sys_disk_control(unsigned int *registers)
+sys_memory_control:
+	push ebp
+	mov ebp, esp
+	mov ecx, [ebp + 8]
+	mov eax, [ecx + 28]
+	cmp eax, 0
+	jne sys_memory_control_not_0
+	; allocate a physical page
+	call allocate_page
+	mov [ecx + 28], eax
+	jmp sys_memory_control_ret
+sys_memory_control_not_0:
+	cmp eax, 1
+	jne sys_memory_control_not_1
+	; free a physical page
+	mov eax, [ecx + 24]
+	push eax
+	call free_page
+	add esp, 4
+	jmp sys_memory_control_ret
+sys_memory_control_not_1:
+	cmp eax, 2
+	jne sys_memory_control_not_2
+	; read physical memory
+	mov eax, [ecx + 16]
+	push eax
+	mov eax, [ecx + 20]
+	push eax
+	mov eax, [ecx + 24]
+	push eax
+	call read_pmem
+	add esp, 12
+	jmp sys_memory_control_ret
+sys_memory_control_not_2:
+	cmp eax, 3
+	jne sys_memory_control_not_3
+	; write physical memory
+	mov eax, [ecx + 16]
+	push eax
+	mov eax, [ecx + 20]
+	push eax
+	mov eax, [ecx + 24]
+	push eax
+	call write_pmem
+	add esp, 12
+	jmp sys_memory_control_ret
+sys_memory_control_not_3:
+	; unknown
+	mov dword [ecx + 28], -1
+sys_memory_control_ret:
 	leave
 	ret
 
