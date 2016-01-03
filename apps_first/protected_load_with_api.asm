@@ -1125,33 +1125,35 @@ trap_message:
 sys_interrupt_config_handler:
 	push ebp
 	mov ebp, esp
-	mov ecx, [ebp + 8]
-	mov eax, [ecx + 28]
+	push ebx
+	mov ebx, [ebp + 8]
+	mov eax, [ebx + 28]
 	cmp eax, 0
 	jne sys_interrupt_config_handler_not_0
 	; set user interrupt handler
-	mov edx, [ecx + 24]
+	mov edx, [ebx + 24]
 	mov [user_interrupt_handler], edx
-	mov [ecx + 28], edx
+	mov [ebx + 28], edx
 	jmp sys_interrupt_config_handler_ret
 sys_interrupt_config_handler_not_0:
 	cmp eax, 1
 	jne sys_interrupt_config_handler_not_1
 	; get user interrupt handler
 	mov edx, [user_interrupt_handler]
-	mov [ecx + 28], edx
+	mov [ebx + 28], edx
 	jmp sys_interrupt_config_handler_ret
 sys_interrupt_config_handler_not_1:
 	cmp eax, 2
 	jne sys_interrupt_config_handler_not_2
 	; read EFLAGS returned from last BIOS call
 	mov edx, [last_bios_eflags]
-	mov [ecx + 28], edx
+	mov [ebx + 28], edx
 	jmp sys_interrupt_config_handler_ret
 sys_interrupt_config_handler_not_2:
 	; unknown
-	mov dword [ecx + 28], -1
+	mov dword [ebx + 28], -1
 sys_interrupt_config_handler_ret:
+	pop ebx
 	leave
 	ret
 
@@ -1159,51 +1161,53 @@ sys_interrupt_config_handler_ret:
 sys_disk_control:
 	push ebp
 	mov ebp, esp
-	mov ecx, [ebp + 8]
-	mov eax, [ecx + 28]
+	push ebx
+	mov ebx, [ebp + 8]
+	mov eax, [ebx + 28]
 	cmp eax, 0
 	jne sys_disk_control_not_0
 	; get disk size
 	mov edx, [disk_size]
-	mov [ecx + 28], edx
+	mov [ebx + 28], edx
 	jmp sys_disk_control_ret
 sys_disk_control_not_0:
 	cmp eax, 1
 	jne sys_disk_control_not_1
 	; read disk sector
-	mov edx, [ecx + 24]
+	mov edx, [ebx + 24]
 	cmp edx, [disk_size]
 	jae sys_disk_control_read_too_large
 	add edx, [bpb_hidden_sectors]
 	push edx
-	mov edx, [ecx + 20]
+	mov edx, [ebx + 20]
 	push edx
 	call read_sector
 	add esp, 8
-	mov [ecx + 28], eax
+	mov [ebx + 28], eax
 	jmp sys_disk_control_ret
 sys_disk_control_read_too_large:
-	mov dword [ecx + 28], -0x1000000
+	mov dword [ebx + 28], -0x1000000
 	jmp sys_disk_control_ret
 sys_disk_control_not_1:
 	cmp eax, 2
 	jne sys_disk_control_not_2
 	; write disk sector
-	mov edx, [ecx + 24]
+	mov edx, [ebx + 24]
 	cmp edx, [disk_size]
 	jae sys_disk_control_read_too_large
 	add edx, [bpb_hidden_sectors]
 	push edx
-	mov edx, [ecx + 20]
+	mov edx, [ebx + 20]
 	push edx
 	call write_sector
 	add esp, 8
-	mov [ecx + 28], eax
+	mov [ebx + 28], eax
 	jmp sys_disk_control_ret
 sys_disk_control_not_2:
 	; unknown
-	mov dword [ecx + 28], -1
+	mov dword [ebx + 28], -1
 sys_disk_control_ret:
+	pop ebx
 	leave
 	ret
 
@@ -1211,19 +1215,20 @@ sys_disk_control_ret:
 sys_memory_control:
 	push ebp
 	mov ebp, esp
-	mov ecx, [ebp + 8]
-	mov eax, [ecx + 28]
+	push ebx
+	mov ebx, [ebp + 8]
+	mov eax, [ebx + 28]
 	cmp eax, 0
 	jne sys_memory_control_not_0
 	; allocate a physical page
 	call allocate_page
-	mov [ecx + 28], eax
+	mov [ebx + 28], eax
 	jmp sys_memory_control_ret
 sys_memory_control_not_0:
 	cmp eax, 1
 	jne sys_memory_control_not_1
 	; free a physical page
-	mov eax, [ecx + 24]
+	mov eax, [ebx + 24]
 	push eax
 	call free_page
 	add esp, 4
@@ -1232,11 +1237,11 @@ sys_memory_control_not_1:
 	cmp eax, 2
 	jne sys_memory_control_not_2
 	; read physical memory
-	mov eax, [ecx + 16]
+	mov eax, [ebx + 16]
 	push eax
-	mov eax, [ecx + 20]
+	mov eax, [ebx + 20]
 	push eax
-	mov eax, [ecx + 24]
+	mov eax, [ebx + 24]
 	push eax
 	call read_pmem
 	add esp, 12
@@ -1245,19 +1250,20 @@ sys_memory_control_not_2:
 	cmp eax, 3
 	jne sys_memory_control_not_3
 	; write physical memory
-	mov eax, [ecx + 16]
+	mov eax, [ebx + 16]
 	push eax
-	mov eax, [ecx + 20]
+	mov eax, [ebx + 20]
 	push eax
-	mov eax, [ecx + 24]
+	mov eax, [ebx + 24]
 	push eax
 	call write_pmem
 	add esp, 12
 	jmp sys_memory_control_ret
 sys_memory_control_not_3:
 	; unknown
-	mov dword [ecx + 28], -1
+	mov dword [ebx + 28], -1
 sys_memory_control_ret:
+	pop ebx
 	leave
 	ret
 
