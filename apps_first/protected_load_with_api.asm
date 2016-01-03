@@ -13,6 +13,11 @@
 ;         (none)
 ;       return data
 ;         EAX : the address of user interrupt handler
+;     EAX = 2 : read EFLAGS returned from last BIOS call
+;       parameters
+;         (none)
+;       return data
+;         EAX : EFLAGS returned from last BIOS call
 
 ; user interrupt handler: int func(int intno, unsigned int *registers)
 ; return 0 if want to have this system handle the interrupt
@@ -930,6 +935,7 @@ sys_interrupt_handler:
 	mov edi, [ebx]
 	pop ebx
 	call soft_int
+	pushf
 	push ebx
 	mov ebx, [ebp + 12]
 	mov [ebx + 28], eax
@@ -940,6 +946,8 @@ sys_interrupt_handler:
 	mov [ebx], edi
 	pop eax
 	mov [ebx + 16], eax
+	pop eax
+	mov [last_bios_eflags], eax
 	jmp sys_interrupt_handler_ret
 sys_interrupt_handler_api:
 	; API
@@ -1016,6 +1024,13 @@ sys_interrupt_config_handler_not_0:
 	mov [ecx + 28], edx
 	jmp sys_interrupt_config_handler_ret
 sys_interrupt_config_handler_not_1:
+	cmp eax, 2
+	jne sys_interrupt_config_handler_not_2
+	; read EFLAGS returned from last BIOS call
+	mov edx, [last_bios_eflags]
+	mov [ecx + 28], edx
+	jmp sys_interrupt_config_handler_ret
+sys_interrupt_config_handler_not_2:
 	mov dword [ecx + 28], -1
 sys_interrupt_config_handler_ret:
 	leave
@@ -1246,6 +1261,7 @@ si_idt: resb 6
 si_idt_zero: resb 6
 
 user_interrupt_handler: resd 1
+last_bios_eflags: resd 1
 
 fat_cache_sector: resd 1
 fat_cache: resb 0x200
