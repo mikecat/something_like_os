@@ -1258,3 +1258,6 @@ current_cluster: resd 1
 current_sector: resd 1
 size_left: resd 1
 sector_left: resd 1
+
+times 0xF000 - ($ - $$) resb 1 ; make sure data does't exceed 0xF000
+free_scratch: resb 0x1000
