@@ -2,6 +2,7 @@
 ; then jump to 0x100000
 
 ; API via interrupt
+
 ;   int 0x3B : config user interrupt handler
 ;     EAX = 0 : set user interrupt handler
 ;       parameters
@@ -18,6 +19,25 @@
 ;         (none)
 ;       return data
 ;         EAX : EFLAGS returned from last BIOS call
+
+;   int 0x3C : disk control
+;     EAX = 0 : get disk size
+;       parameters
+;         (none)
+;       return data
+;         EAX : number of sector in this partition
+;     EAX = 1 : read disk sector
+;       parameters
+;         ECX : sector number to read (0 = BPB of this partition)
+;         EDX : address to read into (512B)
+;       return data
+;         EAX : result (0 : success, non-zero : error code)
+;     EAX = 2 : write disk sector
+;       parameters
+;         ECX : sector number to write (0 = BPB of this partition)
+;         EDX : address of data to write (512B)
+;       return data
+;         EAX : result (0 : success, non-zero : error code)
 
 ; user interrupt handler: int func(int intno, unsigned int *registers)
 ; return 0 if want to have this system handle the interrupt
@@ -541,58 +561,20 @@ disk_readonly_loop:
 
 	; int read_sector(void* addr, unsigned int lba)
 	; return 0 if no error, error code if error
-	; error code 0x100 = lba too large
-	; error code 0x101 = disk information error (not initialized?)
 read_sector:
 	push ebp
 	mov ebp, esp
 	push ebx
 	push esi
 	push edi
-	; disk information check
-	mov eax, [sector_num]
-	test eax, eax
-	jz read_sector_parameter_error
-	cmp eax, 0x3F
-	ja read_sector_parameter_error
-	mov eax, [head_num]
-	test eax, eax
-	jz read_sector_parameter_error
-	cmp eax, 0x100
-	ja read_sector_parameter_error
-	mov eax, [cylinder_num]
-	test eax, eax
-	jz read_sector_parameter_error
-	cmp eax, 0x400
-	ja read_sector_parameter_error
-	jmp read_sector_parameter_ok
-read_sector_parameter_error:
-	mov eax, 0x101
-	jmp read_sector_end
-read_sector_parameter_ok:
 	; convert LBA to CHS
 	mov eax, [ebp + 12]
-	xor edx, edx
-	div dword [sector_num]
-	inc edx
-	mov ebx, edx ; sector number
-	xor edx, edx
-	div dword [head_num] ; EAX = cylinder number, EDX = head number
-	cmp eax, [cylinder_num]
-	jb read_sector_cylinder_ok
-	; cylinder number too large
-	mov eax, 0x100
-	jmp read_sector_end
-read_sector_cylinder_ok:
-	mov dh, dl
-	mov dl, [disk_no]
-	mov ch, al
-	mov cl, ah
-	shl cl, 6
-	and bl, 0x3F
-	or cl, bl
+	call convert_lba_to_chs
+	test eax, eax
+	jnz read_sector_end ; return error code
+	; call BIOS to read disk
 	mov ax, 0x0201
-	mov bx, read_disk_buffer_addr
+	mov bx, disk_buffer_addr
 	push 0x13
 	call soft_int
 	jnc read_sector_ok
@@ -602,7 +584,7 @@ read_sector_cylinder_ok:
 	jmp read_sector_end
 read_sector_ok:
 	; copy data read
-	mov esi, read_disk_buffer_addr
+	mov esi, disk_buffer_addr
 	mov edi, [ebp + 8]
 	mov ecx, 128
 	rep movsd
@@ -612,6 +594,94 @@ read_sector_end:
 	pop esi
 	pop ebx
 	leave
+	ret
+
+	; int write_sector(void* addr, unsigned int lba)
+	; return 0 if no error, error code if error
+write_sector:
+	push ebp
+	mov ebp, esp
+	push ebx
+	push esi
+	push edi
+	; convert LBA to CHS
+	mov eax, [ebp + 12]
+	call convert_lba_to_chs
+	test eax, eax
+	jnz write_sector_end ; return error code
+	; copy data to write
+	mov esi, [ebp + 8]
+	mov edi, disk_buffer_addr
+	mov ecx, 128
+	rep movsd
+	; call BIOS to write disk
+	mov ax, 0x0301
+	mov bx, disk_buffer_addr
+	push 0x13
+	call soft_int
+	jnc write_sector_ok
+	; error
+	mov al, ah
+	movzx eax, al
+	jmp write_sector_end
+write_sector_ok:
+	xor eax, eax
+write_sector_end:
+	pop edi
+	pop esi
+	pop ebx
+	leave
+	ret
+
+	; put LBA to EAX and call
+	; output: CHS on ECX and EDX
+	; output: EAX = 0 if succcess, EAX = non-zero error code on error
+	; destroy EBX
+	; error code 0x100 = lba too large
+	; error code 0x101 = disk information error (not initialized?)
+convert_lba_to_chs:
+	; disk information check
+	mov edx, [sector_num]
+	test edx, edx
+	jz convert_lba_to_chs_parameter_error
+	cmp edx, 0x3F
+	ja convert_lba_to_chs_parameter_error
+	mov edx, [head_num]
+	test edx, edx
+	jz convert_lba_to_chs_parameter_error
+	cmp edx, 0x100
+	ja convert_lba_to_chs_parameter_error
+	mov edx, [cylinder_num]
+	test edx, edx
+	jz convert_lba_to_chs_parameter_error
+	cmp edx, 0x400
+	ja convert_lba_to_chs_parameter_error
+	jmp convert_lba_to_chs_parameter_ok
+convert_lba_to_chs_parameter_error:
+	mov eax, 0x101
+	ret
+convert_lba_to_chs_parameter_ok:
+	; convert LBA to CHS
+	xor edx, edx
+	div dword [sector_num]
+	inc edx
+	mov ebx, edx ; sector number
+	xor edx, edx
+	div dword [head_num] ; EAX = cylinder number, EDX = head number
+	cmp eax, [cylinder_num]
+	jb convert_lba_to_chs_cylinder_ok
+	; cylinder number too large
+	mov eax, 0x100
+	ret
+convert_lba_to_chs_cylinder_ok:
+	mov dh, dl
+	mov dl, [disk_no]
+	mov ch, al
+	mov cl, ah
+	shl cl, 6
+	and bl, 0x3F
+	or cl, bl
+	xor eax, eax
 	ret
 
 	; int putchar(int c)
@@ -959,6 +1029,14 @@ sys_interrupt_handler_api:
 	add esp, 4
 	jmp sys_interrupt_handler_ret
 sys_interrupt_handler_api_not_3b:
+	cmp eax, 0x3C
+	jne sys_interrupt_handler_api_not_3c
+	mov ecx, [ebp + 12]
+	push ecx
+	call sys_disk_control
+	add esp, 4
+	jmp sys_interrupt_handler_ret
+sys_interrupt_handler_api_not_3c:
 	; reserved
 	mov eax, -1
 	jmp sys_interrupt_handler_ret
@@ -1031,8 +1109,61 @@ sys_interrupt_config_handler_not_1:
 	mov [ecx + 28], edx
 	jmp sys_interrupt_config_handler_ret
 sys_interrupt_config_handler_not_2:
+	; unknown
 	mov dword [ecx + 28], -1
 sys_interrupt_config_handler_ret:
+	leave
+	ret
+
+	; void sys_disk_control(unsigned int *registers)
+sys_disk_control:
+	push ebp
+	mov ebp, esp
+	mov ecx, [ebp + 8]
+	mov eax, [ecx + 28]
+	cmp eax, 0
+	jne sys_disk_control_not_0
+	; get disk size
+	mov edx, [disk_size]
+	mov [ecx + 28], edx
+	jmp sys_disk_control_ret
+sys_disk_control_not_0:
+	cmp eax, 1
+	jne sys_disk_control_not_1
+	; read disk sector
+	mov edx, [ecx + 24]
+	cmp edx, [disk_size]
+	jae sys_disk_control_read_too_large
+	add edx, [bpb_hidden_sectors]
+	push edx
+	mov edx, [ecx + 20]
+	push edx
+	call read_sector
+	add esp, 8
+	mov [ecx + 28], eax
+	jmp sys_disk_control_ret
+sys_disk_control_read_too_large:
+	mov dword [ecx + 28], -0x1000000
+	jmp sys_disk_control_ret
+sys_disk_control_not_1:
+	cmp eax, 2
+	jne sys_disk_control_not_2
+	; write disk sector
+	mov edx, [ecx + 24]
+	cmp edx, [disk_size]
+	jae sys_disk_control_read_too_large
+	add edx, [bpb_hidden_sectors]
+	push edx
+	mov edx, [ecx + 20]
+	push edx
+	call write_sector
+	add esp, 8
+	mov [ecx + 28], eax
+	jmp sys_disk_control_ret
+sys_disk_control_not_2:
+	; unknown
+	mov dword [ecx + 28], -1
+sys_disk_control_ret:
 	leave
 	ret
 
@@ -1237,7 +1368,7 @@ bpb_big_total_sectors:   resd 1
 
 absolute 0x8000
 
-read_disk_buffer_addr:
+disk_buffer_addr:
 	resb 0x200
 
 si_eax: resd 1
