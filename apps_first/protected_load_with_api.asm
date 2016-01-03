@@ -1303,6 +1303,28 @@ allocate_page_failed:
 	leave
 	ret
 
+	; void free_page(void* addr)
+	; free a physical page
+	; if the page isn't allocated, or freed page is accessed,
+	; the behavior is undefined
+free_page:
+	push ebp
+	mov ebp, esp
+	mov eax, [ebp + 8]
+	pushf
+	cli ; don't allow interrupt while using window
+	push eax
+	call set_window
+	add esp, 4
+	mov eax, [next_free_pmem] ; write address of next free page to the page
+	mov [physical_window_addr], eax
+	mov eax, [ebp + 8] ; record the address of new free page
+	and eax, 0xFFFFF000
+	mov [next_free_pmem], eax
+	popf
+	leave
+	ret
+
 	; void make_sure_page(void* address)
 make_sure_page:
 	push ebp
